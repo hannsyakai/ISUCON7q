@@ -13,10 +13,13 @@ import (
 	"math/rand"
 	"net/http"
 	"os"
+	"os/exec"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
+	"github.com/go-redis/redis"
 	"github.com/go-sql-driver/mysql"
 	"github.com/gorilla/sessions"
 	"github.com/jmoiron/sqlx"
@@ -27,11 +30,15 @@ import (
 
 const (
 	avatarMaxBytes = 1 * 1024 * 1024
+	immutableImage = "/home/isucon/images/"
+	mutableImage   = "/home/isucon/mutable-images/"
 )
 
 var (
-	db            *sqlx.DB
-	ErrBadReqeust = echo.NewHTTPError(http.StatusBadRequest)
+	imageFetchServer string
+	db               *sqlx.DB
+	redisClient      *redis.Client
+	ErrBadReqeust    = echo.NewHTTPError(http.StatusBadRequest)
 )
 
 type Renderer struct {
@@ -46,6 +53,15 @@ func init() {
 	seedBuf := make([]byte, 8)
 	crand.Read(seedBuf)
 	rand.Seed(int64(binary.LittleEndian.Uint64(seedBuf)))
+	redis_host := os.Getenv("ISUBATA_REDIS_ADDR") // 192.168.101.3:6379
+	if redis_host == "" {
+		redis_host = "127.0.0.1:6379"
+	}
+	redisClient = redis.NewClient(&redis.Options{
+		Addr:     redis_host,
+		Password: os.Getenv("ISUBATA_REDIS_PASSWORD"),
+		DB:       0,
+	})
 
 	db_host := os.Getenv("ISUBATA_DB_HOST")
 	if db_host == "" {
@@ -67,6 +83,7 @@ func init() {
 	dsn := fmt.Sprintf("%s%s@tcp(%s:%s)/isubata?parseTime=true&loc=Local&charset=utf8mb4",
 		db_user, db_password, db_host, db_port)
 
+	log.Printf("imageFetchServer: %s", imageFetchServer)
 	log.Printf("Connecting to db: %q", dsn)
 	db, _ = sqlx.Connect("mysql", dsn)
 	for {
@@ -93,6 +110,15 @@ type User struct {
 	CreatedAt   time.Time `json:"-" db:"created_at"`
 }
 
+func getMessageCount(channelID int64) (int64, error) {
+	val, err := redisClient.Get(fmt.Sprintf("messages-%d", channelID)).Result()
+	if err == redis.Nil {
+		err = redisClient.Set(fmt.Sprintf("messages-%d", channelID), 0, 0).Err()
+	}
+	cnt, _ := strconv.Atoi(val)
+	return int64(cnt), err
+}
+
 func getUser(userID int64) (*User, error) {
 	u := User{}
 	if err := db.Get(&u, "SELECT * FROM user WHERE id = ?", userID); err != nil {
@@ -108,6 +134,10 @@ func addMessage(channelID, userID int64, content string) (int64, error) {
 	res, err := db.Exec(
 		"INSERT INTO message (channel_id, user_id, content, created_at) VALUES (?, ?, ?, NOW())",
 		channelID, userID, content)
+	if err != nil {
+		return 0, err
+	}
+	_, err = redisClient.Incr(fmt.Sprintf("messages-%d", channelID)).Result()
 	if err != nil {
 		return 0, err
 	}
@@ -223,6 +253,36 @@ func getInitialize(c echo.Context) error {
 	db.MustExec("DELETE FROM channel WHERE id > 10")
 	db.MustExec("DELETE FROM message WHERE id > 10000")
 	db.MustExec("DELETE FROM haveread")
+
+	err := exec.Command("/bin/rm", "-rf", "/home/isucon/mutable-images").Run()
+	if err != nil {
+		return err
+	}
+
+	err = exec.Command("/bin/mkdir", "-p", "/home/isucon/mutable-images").Run()
+	if err != nil {
+		return err
+	}
+
+	redisClient.FlushAll()
+	channels, err := queryChannels()
+	if err != nil {
+		return err
+	}
+
+	for _, chID := range channels {
+		var cnt int64
+		err = db.Get(&cnt,
+			"SELECT COUNT(*) as cnt FROM message WHERE channel_id = ?",
+			chID)
+		if err != nil {
+			return err
+		}
+		err := redisClient.Set(fmt.Sprintf("messages-%d", chID), cnt, 0).Err()
+		if err != nil {
+			return err
+		}
+	}
 	return c.String(204, "")
 }
 
@@ -430,17 +490,21 @@ func getMessage(c echo.Context) error {
 	if err != nil {
 		return err
 	}
-	/*
-		if len(messages) > 0 {
-			_, err := db.Exec("INSERT INTO haveread (user_id, channel_id, message_id, updated_at, created_at)"+
-				" VALUES (?, ?, ?, NOW(), NOW())"+
-				" ON DUPLICATE KEY UPDATE message_id = ?, updated_at = NOW()",
-				userID, chanID, messages[0].ID, messages[0].ID)
-			if err != nil {
-				return err
-			}
+
+	if len(response) > 0 {
+		cnt, err := getMessageCount(chanID)
+		if err != nil {
+			return err
 		}
-	*/
+		_, err = db.Exec("INSERT INTO haveread (user_id, channel_id, message_id, updated_at, created_at)"+
+			" VALUES (?, ?, ?, NOW(), NOW())"+
+			" ON DUPLICATE KEY UPDATE message_id = ?, updated_at = NOW()",
+			userID, chanID, cnt, cnt)
+		if err != nil {
+			return err
+		}
+	}
+
 	return c.JSON(http.StatusOK, response)
 }
 
@@ -479,32 +543,27 @@ func fetchUnread(c echo.Context) error {
 
 	time.Sleep(time.Second)
 
-	channels, err := queryChannels()
+	resp := []map[string]interface{}{}
+
+	type ChInfo struct {
+		ChID    int64 `db:"ch_id"`
+		ReadCnt int64 `db:"msg_id"`
+	}
+	data := []ChInfo{}
+	err := db.Select(&data,
+		"SELECT id as ch_id, COALESCE(message_id, 0) as msg_id FROM channel LEFT JOIN haveread ON haveread.user_id=? AND haveread.channel_id=id", userID)
 	if err != nil {
 		return err
 	}
-
-	resp := []map[string]interface{}{}
-
-	for _, chID := range channels {
-		lastID, err := queryHaveRead(userID, chID)
-		if err != nil {
-			return err
-		}
-
+	for _, x := range data {
+		var chID int64 = x.ChID
 		var cnt int64
-		if lastID > 0 {
-			err = db.Get(&cnt,
-				"SELECT COUNT(*) as cnt FROM message WHERE channel_id = ? AND ? < id",
-				chID, lastID)
-		} else {
-			err = db.Get(&cnt,
-				"SELECT COUNT(*) as cnt FROM message WHERE channel_id = ?",
-				chID)
-		}
+		cnt, err = getMessageCount(chID)
 		if err != nil {
 			return err
 		}
+		cnt = cnt - x.ReadCnt
+
 		r := map[string]interface{}{
 			"channel_id": chID,
 			"unread":     cnt}
@@ -685,10 +744,15 @@ func postProfile(c echo.Context) error {
 	}
 
 	if avatarName != "" && len(avatarData) > 0 {
-		_, err := db.Exec("INSERT INTO image (name, data) VALUES (?, ?)", avatarName, avatarData)
+
+		file, err := os.Create(fmt.Sprintf("%s%s", mutableImage, avatarName))
 		if err != nil {
+			log.Printf("!!!ERROR!!! %s", err)
 			return err
 		}
+		file.Write(avatarData)
+		file.Close()
+
 		_, err = db.Exec("UPDATE user SET avatar_icon = ? WHERE id = ?", avatarName, self.ID)
 		if err != nil {
 			return err
@@ -705,19 +769,54 @@ func postProfile(c echo.Context) error {
 	return c.Redirect(http.StatusSeeOther, "/")
 }
 
-func getIcon(c echo.Context) error {
-	var name string
-	var data []byte
-	err := db.QueryRow("SELECT name, data FROM image WHERE name = ?",
-		c.Param("file_name")).Scan(&name, &data)
-	if err == sql.ErrNoRows {
-		return echo.ErrNotFound
-	}
+func getIconFromAP2(name string) ([]byte, error) {
+	path := fmt.Sprintf("http://%s/nginx_fetch_image/%s", imageFetchServer, name)
+	log.Println(path)
+	resp, err := http.DefaultClient.Get(path)
 	if err != nil {
-		return err
+		log.Println(err)
+		return nil, err
+	}
+	defer resp.Body.Close()
+	bs, err := ioutil.ReadAll(resp.Body)
+	return bs, err
+
+}
+
+func fileExists(filename string) bool {
+	_, err := os.Stat(filename)
+
+	if pathError, ok := err.(*os.PathError); ok {
+		if pathError.Err == syscall.ENOTDIR {
+			return false
+		}
 	}
 
+	if os.IsNotExist(err) {
+		return false
+	}
+
+	return true
+}
+
+func getIcon(c echo.Context) error {
+	var data []byte
+	var err error
+	name := c.Param("file_name")
 	mime := ""
+
+	data, err = getIconFromAP2(name)
+	if err != nil {
+		log.Println(err)
+	}
+	file, err := os.Create(fmt.Sprintf("%s%s", mutableImage, name))
+	if err != nil {
+		log.Printf("!!!ERROR!!! %s", err)
+		return err
+	}
+	file.Write(data)
+	file.Close()
+
 	switch true {
 	case strings.HasSuffix(name, ".jpg"), strings.HasSuffix(name, ".jpeg"):
 		mime = "image/jpeg"
