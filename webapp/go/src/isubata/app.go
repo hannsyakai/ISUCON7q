@@ -382,24 +382,13 @@ func jsonifyMessage(m Message) (map[string]interface{}, error) {
 }
 
 func allJsonifyMessage(chanID, lastID, limit, offset int64) ([]map[string]interface{}, error) {
-	/*
-			ID          int64     `db:"id"`
-		ChannelID   int64     `db:"channel_id"`
-		UserID      int64     `db:"user_id"`
-		Content     string    `db:"content"`
-		CreatedAt   time.Time `db:"created_at"`
-		Name        string    `db:"user_name"`
-		DisplayName string    `db:"user_display_name"`
-		AvatarIcon  string    `db:"user_avatar_icon"`
-	*/
 	messages := []MessageInUser{}
-	err := db.Get(&messages, "SELECT message.id as id, message.content as content, message.channel_id as channel_id, message.created_at as created_at, user.id as \"user_id\", user.name as \"user_name\", user.display_name as \"user_display_name\", user.avatar_icon as \"user_avatar_icon\" FROM message INNER JOIN user ON user.id = message.user_id WHERE message.id > ? AND message.channel_id = ? ORDER BY message.id DESC LIMIT ? OFFSET ?",
+	query := fmt.Sprintf("SELECT message.id as id, message.content as content, message.channel_id as channel_id, message.created_at as created_at, user.id as \"user_id\", user.name as \"user_name\", user.display_name as \"user_display_name\", user.avatar_icon as \"user_avatar_icon\""+
+		" FROM message INNER JOIN user ON user.id = message.user_id WHERE message.id > %d AND message.channel_id = %d ORDER BY message.id DESC LIMIT %d OFFSET %d",
 		lastID, chanID, limit, offset)
-	//SELECT message.id as id, message.content as content, user.id as "user.id", user.name as "user.name", user.display_name as "user.display_name", user.avatar_icon as "user.avatar_icon" FROM message INNER JOIN user ON user.id = message.user_id WHERE message.id > 0 AND message.channel_id = 1 ORDER BY message.id DESC LIMIT 100 OFFSET 0
+	err := db.Select(&messages, query)
 	if err != nil {
-		fmt.Printf("SELECT message.id as id, message.content as content, message.channel_id as channel_id, message.created_at as created_at, user.id as \"user_id\", user.name as \"user_name\", user.display_name as \"user_display_name\", user.avatar_icon as \"user_avatar_icon\""+
-			" FROM message INNER JOIN user ON user.id = message.user_id WHERE message.id > %d AND message.channel_id = %d ORDER BY message.id DESC LIMIT %d OFFSET %d",
-			lastID, chanID, limit, offset)
+		fmt.Println(query)
 		fmt.Println("allJsonifyMessage Error!!!!!")
 		return nil, err
 	}
