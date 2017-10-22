@@ -5,6 +5,8 @@ build:
 	GOOS=linux GOARCH=amd64 go build -v -ldflags "-X main.imageFetchServer=192.168.101.2" -o isubata1 isubata
 	GOOS=linux GOARCH=amd64 go build -v -ldflags "-X main.imageFetchServer=192.168.101.1" -o isubata2 isubata
 
+build-my:
+	go build -o myapp -v isubata
 vet:
 	go vet ./src/isubata/...
 

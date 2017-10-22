@@ -19,13 +19,13 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/go-redis/redis"
 	"github.com/go-sql-driver/mysql"
 	"github.com/gorilla/sessions"
 	"github.com/jmoiron/sqlx"
 	"github.com/labstack/echo"
 	"github.com/labstack/echo-contrib/session"
 	"github.com/labstack/echo/middleware"
-	"github.com/go-redis/redis"
 )
 
 const (
@@ -134,9 +134,13 @@ func addMessage(channelID, userID int64, content string) (int64, error) {
 	res, err := db.Exec(
 		"INSERT INTO message (channel_id, user_id, content, created_at) VALUES (?, ?, ?, NOW())",
 		channelID, userID, content)
-	if err != nil { return 0, err }
+	if err != nil {
+		return 0, err
+	}
 	_, err = redisClient.Incr(fmt.Sprintf("messages-%d", channelID)).Result()
-	if err != nil { return 0, err }
+	if err != nil {
+		return 0, err
+	}
 	return res.LastInsertId()
 }
 
@@ -146,6 +150,21 @@ type Message struct {
 	UserID    int64     `db:"user_id"`
 	Content   string    `db:"content"`
 	CreatedAt time.Time `db:"created_at"`
+}
+
+/*
+| id | content | channel_id | created_at          | user_id | user_name | user_display_name | user_avatar_icon |
++----+---------+------------+---------------------+---------+-----------+-------------------+------------------+
+*/
+type MessageInUser struct {
+	ID          int64     `db:"id"`
+	ChannelID   int64     `db:"channel_id"`
+	UserID      int64     `db:"user_id"`
+	Content     string    `db:"content"`
+	CreatedAt   time.Time `db:"created_at"`
+	Name        string    `db:"user_name"`
+	DisplayName string    `db:"user_display_name"`
+	AvatarIcon  string    `db:"user_avatar_icon"`
 }
 
 func queryMessages(chanID, lastID int64) ([]Message, error) {
@@ -247,16 +266,22 @@ func getInitialize(c echo.Context) error {
 
 	redisClient.FlushAll()
 	channels, err := queryChannels()
-	if err != nil { return err }
+	if err != nil {
+		return err
+	}
 
 	for _, chID := range channels {
 		var cnt int64
 		err = db.Get(&cnt,
 			"SELECT COUNT(*) as cnt FROM message WHERE channel_id = ?",
 			chID)
-		if err != nil { return err }
+		if err != nil {
+			return err
+		}
 		err := redisClient.Set(fmt.Sprintf("messages-%d", chID), cnt, 0).Err()
-		if err != nil { return err }
+		if err != nil {
+			return err
+		}
 	}
 	return c.String(204, "")
 }
@@ -416,6 +441,37 @@ func jsonifyMessage(m Message) (map[string]interface{}, error) {
 	return r, nil
 }
 
+func allJsonifyMessage(chanID, lastID, limit, offset int64) ([]map[string]interface{}, error) {
+	messages := []MessageInUser{}
+	query := fmt.Sprintf("SELECT message.id as id, message.content as content, message.channel_id as channel_id, message.created_at as created_at, user.id as \"user_id\", user.name as \"user_name\", user.display_name as \"user_display_name\", user.avatar_icon as \"user_avatar_icon\""+
+		" FROM message INNER JOIN user ON user.id = message.user_id WHERE message.id > %d AND message.channel_id = %d ORDER BY message.id DESC LIMIT %d OFFSET %d",
+		lastID, chanID, limit, offset)
+	err := db.Select(&messages, query)
+	if err != nil {
+		fmt.Println(query)
+		fmt.Println("allJsonifyMessage Error!!!!!")
+		return nil, err
+	}
+
+	mjson := make([]map[string]interface{}, 0)
+	for i := len(messages) - 1; i >= 0; i-- {
+		m := messages[i]
+
+		r := make(map[string]interface{})
+		r["id"] = m.ID
+		r["user"] = User{
+			ID:          m.UserID,
+			Name:        m.Name,
+			AvatarIcon:  m.AvatarIcon,
+			DisplayName: m.DisplayName,
+		}
+		r["date"] = m.CreatedAt.Format("2006/01/02 15:04:05")
+		r["content"] = m.Content
+		mjson = append(mjson, r)
+	}
+	return mjson, nil
+}
+
 func getMessage(c echo.Context) error {
 	userID := sessUserID(c)
 	if userID == 0 {
@@ -431,29 +487,23 @@ func getMessage(c echo.Context) error {
 		return err
 	}
 
-	messages, err := queryMessages(chanID, lastID)
+	response, err := allJsonifyMessage(chanID, lastID, 100, 0)
 	if err != nil {
 		return err
 	}
 
-	response := make([]map[string]interface{}, 0)
-	for i := len(messages) - 1; i >= 0; i-- {
-		m := messages[i]
-		r, err := jsonifyMessage(m)
+	if len(response) > 0 {
+		cnt, err := getMessageCount(chanID)
 		if err != nil {
 			return err
 		}
-		response = append(response, r)
-	}
-
-	if len(messages) > 0 {
-		cnt, err := getMessageCount(chanID)
-		if err != nil { return err }
 		_, err = db.Exec("INSERT INTO haveread (user_id, channel_id, message_id, updated_at, created_at)"+
 			" VALUES (?, ?, ?, NOW(), NOW())"+
 			" ON DUPLICATE KEY UPDATE message_id = ?, updated_at = NOW()",
 			userID, chanID, cnt, cnt)
-		if err != nil { return err }
+		if err != nil {
+			return err
+		}
 	}
 
 	return c.JSON(http.StatusOK, response)
@@ -497,18 +547,22 @@ func fetchUnread(c echo.Context) error {
 	resp := []map[string]interface{}{}
 
 	type ChInfo struct {
-		ChID      int64     `db:"ch_id"`
-		ReadCnt   int64     `db:"msg_id"`
+		ChID    int64 `db:"ch_id"`
+		ReadCnt int64 `db:"msg_id"`
 	}
 	data := []ChInfo{}
 	err := db.Select(&data,
 		"SELECT id as ch_id, COALESCE(message_id, 0) as msg_id FROM channel LEFT JOIN haveread ON haveread.user_id=? AND haveread.channel_id=id", userID)
-	if err != nil { return err }
+	if err != nil {
+		return err
+	}
 	for _, x := range data {
 		var chID int64 = x.ChID
 		var cnt int64
 		cnt, err = getMessageCount(chID)
-		if err != nil { return err }
+		if err != nil {
+			return err
+		}
 		cnt = cnt - x.ReadCnt
 
 		r := map[string]interface{}{
@@ -556,21 +610,9 @@ func getHistory(c echo.Context) error {
 		return ErrBadReqeust
 	}
 
-	messages := []Message{}
-	err = db.Select(&messages,
-		"SELECT * FROM message WHERE channel_id = ? ORDER BY id DESC LIMIT ? OFFSET ?",
-		chID, N, (page-1)*N)
+	mjson, err := allJsonifyMessage(chID, 0, N, (page-1)*N)
 	if err != nil {
 		return err
-	}
-
-	mjson := make([]map[string]interface{}, 0)
-	for i := len(messages) - 1; i >= 0; i-- {
-		r, err := jsonifyMessage(messages[i])
-		if err != nil {
-			return err
-		}
-		mjson = append(mjson, r)
 	}
 
 	channels := []ChannelInfo{}
