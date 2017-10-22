@@ -826,7 +826,7 @@ func main() {
 
 	e.GET("add_channel", getAddChannel)
 	e.POST("add_channel", postAddChannel)
-	e.GET("/golang_fetch_image/:file_name", getIcon)
+	e.GET("/icons/:file_name", getIcon)
 
 	e.GET("start_on_ppprof", startOnPprof)
 	e.GET("end_on_ppprof", endOnPprof)
