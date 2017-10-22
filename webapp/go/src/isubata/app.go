@@ -112,6 +112,9 @@ type User struct {
 
 func getMessageCount(channelID int64) (int64, error) {
 	val, err := redisClient.Get(fmt.Sprintf("messages-%d", channelID)).Result()
+	if err == redis.Nil {
+		err = redisClient.Set(fmt.Sprintf("messages-%d", channelID), 0, 0).Err()
+	}
 	cnt, _ := strconv.Atoi(val)
 	return int64(cnt), err
 }
@@ -252,7 +255,7 @@ func getInitialize(c echo.Context) error {
 			"SELECT COUNT(*) as cnt FROM message WHERE channel_id = ?",
 			chID)
 		if err != nil { return err }
-		err := redisClient.Set(fmt.Sprintf("messages-%d", chID), fmt.Sprint(cnt), 0).Err()
+		err := redisClient.Set(fmt.Sprintf("messages-%d", chID), cnt, 0).Err()
 		if err != nil { return err }
 	}
 	return c.String(204, "")
