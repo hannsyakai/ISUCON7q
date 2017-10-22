@@ -366,6 +366,34 @@ func jsonifyMessage(m Message) (map[string]interface{}, error) {
 	return r, nil
 }
 
+func allJsonifyMessage(chanID, lastID, limit, offset int64, messages []Message) ([]map[string]interface{}, error) {
+	us := []User{}
+	err := db.Get(&us, "SELECT name, display_name, avatar_icon, id FROM user RIGHT OUTER JOIN"+
+		"(SELECT user_id FROM message WHERE id > ? AND channel_id = ? ORDER BY id DESC LIMIT ? OFFSET ?) msg ON user.id = msg.user_id",
+		lastID, chanID, limit, offset)
+	if err != nil {
+		return nil, err
+	}
+
+	maicon := make([]User, 2000)
+	for _, v := range us {
+		maicon[v.ID] = v
+	}
+
+	mjson := make([]map[string]interface{}, 0)
+	for i := len(messages) - 1; i >= 0; i-- {
+		m := messages[i]
+
+		r := make(map[string]interface{})
+		r["id"] = m.ID
+		r["user"] = maicon[m.UserID]
+		r["date"] = m.CreatedAt.Format("2006/01/02 15:04:05")
+		r["content"] = m.Content
+		mjson = append(mjson, r)
+	}
+	return mjson, nil
+}
+
 func getMessage(c echo.Context) error {
 	userID := sessUserID(c)
 	if userID == 0 {
@@ -386,14 +414,9 @@ func getMessage(c echo.Context) error {
 		return err
 	}
 
-	response := make([]map[string]interface{}, 0)
-	for i := len(messages) - 1; i >= 0; i-- {
-		m := messages[i]
-		r, err := jsonifyMessage(m)
-		if err != nil {
-			return err
-		}
-		response = append(response, r)
+	response, err := allJsonifyMessage(chanID, lastID, 0, 0, messages)
+	if err != nil {
+		return err
 	}
 
 	if len(messages) > 0 {
@@ -523,13 +546,9 @@ func getHistory(c echo.Context) error {
 		return err
 	}
 
-	mjson := make([]map[string]interface{}, 0)
-	for i := len(messages) - 1; i >= 0; i-- {
-		r, err := jsonifyMessage(messages[i])
-		if err != nil {
-			return err
-		}
-		mjson = append(mjson, r)
+	mjson, err := allJsonifyMessage(chID, 0, N, (page-1)*N, messages)
+	if err != nil {
+		return err
 	}
 
 	channels := []ChannelInfo{}
@@ -729,7 +748,6 @@ func startOnPprof(c echo.Context) error {
 	}
 }
 
-
 func endOnPprof(c echo.Context) error {
 	err := EndProfile()
 	if err != nil {
@@ -777,7 +795,6 @@ func main() {
 
 	e.GET("start_on_ppprof", startOnPprof)
 	e.GET("end_on_ppprof", endOnPprof)
-
 
 	e.Start(":5000")
 }
