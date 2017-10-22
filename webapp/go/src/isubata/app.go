@@ -685,7 +685,6 @@ func postProfile(c echo.Context) error {
 			log.Printf("!!!ERROR!!! %s", err)
 			return err
 		}
-		defer file.Close()
 		file.Write(avatarData)
 		file.Close()
 
@@ -706,8 +705,11 @@ func postProfile(c echo.Context) error {
 }
 
 func getIconFromAP2(name string) ([]byte, error) {
-	resp, err := http.DefaultClient.Get(fmt.Sprintf("%s/nginx_fetch_image/%s", imageFetchServer, name))
+	path := fmt.Sprintf("http://%s/nginx_fetch_image/%s", imageFetchServer, name)
+	log.Println(path)
+	resp, err := http.DefaultClient.Get(path)
 	if err != nil {
+		log.Println(err)
 		return nil, err
 	}
 	defer resp.Body.Close()
@@ -733,17 +735,22 @@ func fileExists(filename string) bool {
 }
 
 func getIcon(c echo.Context) error {
-	var name string
 	var data []byte
 	var err error
-	// try to http get ap2/icons/{name} and put the content onto /home/isucon/isubata/webapp/public/icons
-	filename := c.Param("file_name")
+	name := c.Param("file_name")
 	mime := ""
 
-	data, err = getIconFromAP2(filename)
+	data, err = getIconFromAP2(name)
 	if err != nil {
 		log.Println(err)
 	}
+	file, err := os.Create(fmt.Sprintf("%s%s", mutableImage, name))
+	if err != nil {
+		log.Printf("!!!ERROR!!! %s", err)
+		return err
+	}
+	file.Write(data)
+	file.Close()
 
 	switch true {
 	case strings.HasSuffix(name, ".jpg"), strings.HasSuffix(name, ".jpeg"):
