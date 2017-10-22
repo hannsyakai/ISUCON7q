@@ -720,6 +720,25 @@ func tRange(a, b int64) []int64 {
 	return r
 }
 
+func startOnPprof(c echo.Context) error {
+	err := StartProfile(time.Minute)
+	if err != nil {
+		return c.String(500, "start pprof error")
+	} else {
+		return c.String(204, "")
+	}
+}
+
+
+func endOnPprof(c echo.Context) error {
+	err := EndProfile()
+	if err != nil {
+		return c.String(500, "end pprof error")
+	} else {
+		return c.String(204, "")
+	}
+}
+
 func main() {
 	e := echo.New()
 	funcs := template.FuncMap{
@@ -755,6 +774,10 @@ func main() {
 	e.GET("add_channel", getAddChannel)
 	e.POST("add_channel", postAddChannel)
 	e.GET("/icons/:file_name", getIcon)
+
+	e.GET("start_on_ppprof", startOnPprof)
+	e.GET("end_on_ppprof", endOnPprof)
+
 
 	e.Start(":5000")
 }
