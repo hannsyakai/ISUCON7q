@@ -679,17 +679,15 @@ func postProfile(c echo.Context) error {
 	}
 
 	if avatarName != "" && len(avatarData) > 0 {
-		_, err := db.Exec("INSERT INTO image (name, data) VALUES (?, ?)", avatarName, avatarData)
-		if err != nil {
-			return err
-		}
 
 		file, err := os.Create(fmt.Sprintf("%s%s", mutableImage, avatarName))
 		if err != nil {
+			log.Printf("!!!ERROR!!! %s", err)
 			return err
 		}
 		defer file.Close()
 		file.Write(avatarData)
+		file.Close()
 
 		_, err = db.Exec("UPDATE user SET avatar_icon = ? WHERE id = ?", avatarName, self.ID)
 		if err != nil {
