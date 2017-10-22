@@ -23,6 +23,7 @@ import (
 	"github.com/labstack/echo"
 	"github.com/labstack/echo-contrib/session"
 	"github.com/labstack/echo/middleware"
+	"github.com/go-redis/redis"
 )
 
 const (
@@ -31,6 +32,7 @@ const (
 
 var (
 	db            *sqlx.DB
+	redisClient   *redis.Client
 	ErrBadReqeust = echo.NewHTTPError(http.StatusBadRequest)
 )
 
@@ -46,6 +48,15 @@ func init() {
 	seedBuf := make([]byte, 8)
 	crand.Read(seedBuf)
 	rand.Seed(int64(binary.LittleEndian.Uint64(seedBuf)))
+	redis_host := os.Getenv("ISUBATA_REDIS_ADDR") // 192.168.101.3:6379
+	if redis_host == "" {
+		redis_host = "127.0.0.1:6379"
+	}
+	redisClient = redis.NewClient(&redis.Options{
+		Addr:     redis_host,
+		Password: os.Getenv("ISUBATA_REDIS_PASSWORD"),
+		DB:       0,
+	})
 
 	db_host := os.Getenv("ISUBATA_DB_HOST")
 	if db_host == "" {
