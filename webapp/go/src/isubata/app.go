@@ -721,7 +721,7 @@ func tRange(a, b int64) []int64 {
 }
 
 func startOnPprof(c echo.Context) error {
-	err := StartProfile(time.Minute)
+	err := StartProfile(time.Minute*3)
 	if err != nil {
 		return c.String(500, "start pprof error")
 	} else {
