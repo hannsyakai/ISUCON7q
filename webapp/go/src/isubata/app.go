@@ -104,9 +104,10 @@ type User struct {
 	CreatedAt   time.Time `json:"-" db:"created_at"`
 }
 
-func getMessageCount(channelID int64) (string, error) {
-	val, err := redisClient.Get(fmt.Sprintf(`messages-%d`, channelID)).Result()
-	return val, err
+func getMessageCount(channelID int64) (int64, error) {
+	val, err := redisClient.Get(fmt.Sprintf("messages-%d", channelID)).Result()
+	cnt, _ := strconv.Atoi(val)
+	return int64(cnt), err
 }
 
 func getUser(userID int64) (*User, error) {
@@ -427,13 +428,13 @@ func getMessage(c echo.Context) error {
 	}
 
 	if len(messages) > 0 {
-		_, err := db.Exec("INSERT INTO haveread (user_id, channel_id, message_id, updated_at, created_at)"+
+		cnt, err := getMessageCount(chanID)
+		if err != nil { return err }
+		_, err = db.Exec("INSERT INTO haveread (user_id, channel_id, message_id, updated_at, created_at)"+
 			" VALUES (?, ?, ?, NOW(), NOW())"+
 			" ON DUPLICATE KEY UPDATE message_id = ?, updated_at = NOW()",
-			userID, chanID, messages[0].ID, messages[0].ID)
-		if err != nil {
-			return err
-		}
+			userID, chanID, cnt, cnt)
+		if err != nil { return err }
 	}
 
 	return c.JSON(http.StatusOK, response)
@@ -482,24 +483,16 @@ func fetchUnread(c echo.Context) error {
 	resp := []map[string]interface{}{}
 
 	for _, chID := range channels {
-		lastID, err := queryHaveRead(userID, chID)
+		readCnt, err := queryHaveRead(userID, chID)
 		if err != nil {
 			return err
 		}
 
 		var cnt int64
-		if lastID > 0 {
-			err = db.Get(&cnt,
-				"SELECT COUNT(*) as cnt FROM message WHERE channel_id = ? AND ? < id",
-				chID, lastID)
-		} else {
-			err = db.Get(&cnt,
-				"SELECT COUNT(*) as cnt FROM message WHERE channel_id = ?",
-				chID)
-		}
-		if err != nil {
-			return err
-		}
+		cnt, err = getMessageCount(chID)
+		if err != nil { return err }
+		if readCnt > 0 { cnt = cnt - readCnt }
+
 		r := map[string]interface{}{
 			"channel_id": chID,
 			"unread":     cnt}
