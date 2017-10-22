@@ -13,8 +13,10 @@ import (
 	"math/rand"
 	"net/http"
 	"os"
+	"os/exec"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/go-sql-driver/mysql"
@@ -27,11 +29,14 @@ import (
 
 const (
 	avatarMaxBytes = 1 * 1024 * 1024
+	immutableImage = "/home/isucon/images/"
+	mutableImage   = "/home/isucon/mutable-images/"
 )
 
 var (
-	db            *sqlx.DB
-	ErrBadReqeust = echo.NewHTTPError(http.StatusBadRequest)
+	imageFetchServer string
+	db               *sqlx.DB
+	ErrBadReqeust    = echo.NewHTTPError(http.StatusBadRequest)
 )
 
 type Renderer struct {
@@ -67,6 +72,7 @@ func init() {
 	dsn := fmt.Sprintf("%s%s@tcp(%s:%s)/isubata?parseTime=true&loc=Local&charset=utf8mb4",
 		db_user, db_password, db_host, db_port)
 
+	log.Printf("imageFetchServer: %s", imageFetchServer)
 	log.Printf("Connecting to db: %q", dsn)
 	db, _ = sqlx.Connect("mysql", dsn)
 	for {
@@ -208,6 +214,17 @@ func getInitialize(c echo.Context) error {
 	db.MustExec("DELETE FROM channel WHERE id > 10")
 	db.MustExec("DELETE FROM message WHERE id > 10000")
 	db.MustExec("DELETE FROM haveread")
+
+	err := exec.Command("/bin/rm", "-rf", "/home/isucon/mutable-images").Run()
+	if err != nil {
+		fmt.Println(err)
+	}
+
+	err = exec.Command("/bin/mkdir", "-p", "/home/isucon/mutable-images").Run()
+	if err != nil {
+		fmt.Println(err)
+	}
+
 	return c.String(204, "")
 }
 
@@ -662,10 +679,15 @@ func postProfile(c echo.Context) error {
 	}
 
 	if avatarName != "" && len(avatarData) > 0 {
-		_, err := db.Exec("INSERT INTO image (name, data) VALUES (?, ?)", avatarName, avatarData)
+
+		file, err := os.Create(fmt.Sprintf("%s%s", mutableImage, avatarName))
 		if err != nil {
+			log.Printf("!!!ERROR!!! %s", err)
 			return err
 		}
+		file.Write(avatarData)
+		file.Close()
+
 		_, err = db.Exec("UPDATE user SET avatar_icon = ? WHERE id = ?", avatarName, self.ID)
 		if err != nil {
 			return err
@@ -682,19 +704,54 @@ func postProfile(c echo.Context) error {
 	return c.Redirect(http.StatusSeeOther, "/")
 }
 
-func getIcon(c echo.Context) error {
-	var name string
-	var data []byte
-	err := db.QueryRow("SELECT name, data FROM image WHERE name = ?",
-		c.Param("file_name")).Scan(&name, &data)
-	if err == sql.ErrNoRows {
-		return echo.ErrNotFound
-	}
+func getIconFromAP2(name string) ([]byte, error) {
+	path := fmt.Sprintf("http://%s/nginx_fetch_image/%s", imageFetchServer, name)
+	log.Println(path)
+	resp, err := http.DefaultClient.Get(path)
 	if err != nil {
-		return err
+		log.Println(err)
+		return nil, err
+	}
+	defer resp.Body.Close()
+	bs, err := ioutil.ReadAll(resp.Body)
+	return bs, err
+
+}
+
+func fileExists(filename string) bool {
+	_, err := os.Stat(filename)
+
+	if pathError, ok := err.(*os.PathError); ok {
+		if pathError.Err == syscall.ENOTDIR {
+			return false
+		}
 	}
 
+	if os.IsNotExist(err) {
+		return false
+	}
+
+	return true
+}
+
+func getIcon(c echo.Context) error {
+	var data []byte
+	var err error
+	name := c.Param("file_name")
 	mime := ""
+
+	data, err = getIconFromAP2(name)
+	if err != nil {
+		log.Println(err)
+	}
+	file, err := os.Create(fmt.Sprintf("%s%s", mutableImage, name))
+	if err != nil {
+		log.Printf("!!!ERROR!!! %s", err)
+		return err
+	}
+	file.Write(data)
+	file.Close()
+
 	switch true {
 	case strings.HasSuffix(name, ".jpg"), strings.HasSuffix(name, ".jpeg"):
 		mime = "image/jpeg"
@@ -728,7 +785,6 @@ func startOnPprof(c echo.Context) error {
 		return c.String(204, "")
 	}
 }
-
 
 func endOnPprof(c echo.Context) error {
 	err := EndProfile()
@@ -777,7 +833,6 @@ func main() {
 
 	e.GET("start_on_ppprof", startOnPprof)
 	e.GET("end_on_ppprof", endOnPprof)
-
 
 	e.Start(":5000")
 }
