@@ -4,6 +4,8 @@ export GOPATH
 build:
 	GOOS=linux GOARCH=amd64 go build -v isubata
 
+build-my:
+	go build -o myapp -v isubata
 vet:
 	go vet ./src/isubata/...
 
