@@ -453,7 +453,7 @@ func allJsonifyMessage(chanID, lastID, limit, offset int64) ([]map[string]interf
 		return nil, err
 	}
 
-	mjson := make([]map[string]interface{}, 0)
+	mjson := make([]map[string]interface{}, 0,len(messages))
 	for i := len(messages) - 1; i >= 0; i-- {
 		m := messages[i]
 
