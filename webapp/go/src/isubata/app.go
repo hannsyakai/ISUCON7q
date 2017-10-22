@@ -461,6 +461,7 @@ func allJsonifyMessage(chanID, lastID, limit, offset int64) ([]map[string]interf
 		r["id"] = m.ID
 		r["user"] = User{
 			ID:          m.UserID,
+			Name:        m.Name,
 			AvatarIcon:  m.AvatarIcon,
 			DisplayName: m.DisplayName,
 		}
