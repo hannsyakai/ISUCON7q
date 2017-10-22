@@ -682,9 +682,25 @@ func postProfile(c echo.Context) error {
 	return c.Redirect(http.StatusSeeOther, "/")
 }
 
+func getIconFromAP2(name string) ([]string, error) {
+	resp, err := http.DefaultClient.Get(pathURIEscape(fmt.Sprintf("%s/%s", isutomoEndpoint, name)))
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var data struct {
+		Result []string `json:"friends"`
+	}
+	err = json.NewDecoder(resp.Body).Decode(&data)
+	return data.Result, err
+}
+
 func getIcon(c echo.Context) error {
 	var name string
 	var data []byte
+  // try to http get ap2/icons/{name} and put the content onto /home/isucon/isubata/webapp/public/icons
+	
 	err := db.QueryRow("SELECT name, data FROM image WHERE name = ?",
 		c.Param("file_name")).Scan(&name, &data)
 	if err == sql.ErrNoRows {
