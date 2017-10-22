@@ -487,12 +487,10 @@ func fetchUnread(c echo.Context) error {
 	if err != nil { return err }
 	for _, x := range data {
 		var chID int64 = x.ChID
-		var readCnt int64 = x.ReadCnt
-
 		var cnt int64
 		cnt, err = getMessageCount(chID)
 		if err != nil { return err }
-		if readCnt > 0 { cnt = cnt - readCnt }
+		cnt = cnt - x.ReadCnt
 
 		r := map[string]interface{}{
 			"channel_id": chID,
