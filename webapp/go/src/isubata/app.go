@@ -101,7 +101,7 @@ func init() {
 }
 
 type User struct {
-	ID          int64     `json:"id" db:"id"`
+	ID          int64     `json:"-" db:"id"`
 	Name        string    `json:"name" db:"name"`
 	Salt        string    `json:"-" db:"salt"`
 	Password    string    `json:"-" db:"password"`
