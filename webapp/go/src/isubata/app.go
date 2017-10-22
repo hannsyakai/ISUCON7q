@@ -475,18 +475,19 @@ func fetchUnread(c echo.Context) error {
 
 	time.Sleep(time.Second)
 
-	channels, err := queryChannels()
-	if err != nil {
-		return err
-	}
-
 	resp := []map[string]interface{}{}
 
-	for _, chID := range channels {
-		readCnt, err := queryHaveRead(userID, chID)
-		if err != nil {
-			return err
-		}
+	type ChInfo struct {
+		ChID      int64     `db:"ch_id"`
+		ReadCnt   int64     `db:"msg_id"`
+	}
+	data := []ChInfo{}
+	err := db.Select(&data,
+		"SELECT id as ch_id, COALESCE(message_id, 0) as msg_id FROM channel LEFT JOIN haveread ON haveread.user_id=? AND haveread.channel_id=id", userID)
+	if err != nil { return err }
+	for _, x := range data {
+		var chID int64 = x.ChID
+		var readCnt int64 = x.ReadCnt
 
 		var cnt int64
 		cnt, err = getMessageCount(chID)
