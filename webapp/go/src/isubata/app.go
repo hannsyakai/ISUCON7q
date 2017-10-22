@@ -104,6 +104,11 @@ type User struct {
 	CreatedAt   time.Time `json:"-" db:"created_at"`
 }
 
+func getMessageCount(channelID int64) (string, error) {
+	val, err := redisClient.Get(fmt.Sprintf(`messages-%d`, channelID)).Result()
+	return val, err
+}
+
 func getUser(userID int64) (*User, error) {
 	u := User{}
 	if err := db.Get(&u, "SELECT * FROM user WHERE id = ?", userID); err != nil {
@@ -219,6 +224,20 @@ func getInitialize(c echo.Context) error {
 	db.MustExec("DELETE FROM channel WHERE id > 10")
 	db.MustExec("DELETE FROM message WHERE id > 10000")
 	db.MustExec("DELETE FROM haveread")
+
+	redisClient.FlushAll()
+	channels, err := queryChannels()
+	if err != nil { return err }
+
+	for _, chID := range channels {
+		var cnt int64
+		err = db.Get(&cnt,
+			"SELECT COUNT(*) as cnt FROM message WHERE channel_id = ?",
+			chID)
+		if err != nil { return err }
+		err := redisClient.Set(fmt.Sprintf("messages-%d", chID), fmt.Sprint(cnt), 0).Err()
+		if err != nil { return err }
+	}
 	return c.String(204, "")
 }
 
