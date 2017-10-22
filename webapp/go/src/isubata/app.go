@@ -215,7 +215,15 @@ func getInitialize(c echo.Context) error {
 	db.MustExec("DELETE FROM message WHERE id > 10000")
 	db.MustExec("DELETE FROM haveread")
 
-	exec.Command("rm", "-rf", "/home/isucon/mutable-images/*").Start()
+	err := exec.Command("/bin/rm", "-rf", "/home/isucon/mutable-images").Run()
+	if err != nil {
+		fmt.Println(err)
+	}
+
+	err = exec.Command("/bin/mkdir", "-p", "/home/isucon/mutable-images").Run()
+	if err != nil {
+		fmt.Println(err)
+	}
 
 	return c.String(204, "")
 }
@@ -734,19 +742,9 @@ func getIcon(c echo.Context) error {
 	filename := c.Param("file_name")
 	mime := ""
 
-	path := fmt.Sprintf("%s%s", immutableImage, filename)
-	if fileExists(path) {
-		data, err = ioutil.ReadFile(path)
-		if err != nil {
-			log.Println(err)
-		}
-	}
-
-	if data == nil {
-		data, err = getIconFromAP2(filename)
-		if err != nil {
-			log.Println(err)
-		}
+	data, err = getIconFromAP2(filename)
+	if err != nil {
+		log.Println(err)
 	}
 
 	switch true {
