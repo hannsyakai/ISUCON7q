@@ -15,3 +15,5 @@ deploy:
 	scp ./isubata2 isucon@59.106.209.11:/home/isucon/isubata/webapp/go/isubata
 	ssh isucon@163.43.29.171 "sudo systemctl start isubata.golang"
 	ssh isucon@59.106.209.11 "sudo systemctl start isubata.golang"
+	curl 163.43.29.171/initialize
+	curl 59.106.209.11/initialize
