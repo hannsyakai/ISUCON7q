@@ -232,6 +232,16 @@ func getInitialize(c echo.Context) error {
 	db.MustExec("DELETE FROM message WHERE id > 10000")
 	db.MustExec("DELETE FROM haveread")
 
+	err := exec.Command("/bin/rm", "-rf", "/home/isucon/mutable-images").Run()
+	if err != nil {
+		return err
+	}
+
+	err = exec.Command("/bin/mkdir", "-p", "/home/isucon/mutable-images").Run()
+	if err != nil {
+		return err
+	}
+
 	redisClient.FlushAll()
 	channels, err := queryChannels()
 	if err != nil { return err }
@@ -244,15 +254,6 @@ func getInitialize(c echo.Context) error {
 		if err != nil { return err }
 		err := redisClient.Set(fmt.Sprintf("messages-%d", chID), fmt.Sprint(cnt), 0).Err()
 		if err != nil { return err }
-	}
-	err := exec.Command("/bin/rm", "-rf", "/home/isucon/mutable-images").Run()
-	if err != nil {
-		fmt.Println(err)
-	}
-
-	err = exec.Command("/bin/mkdir", "-p", "/home/isucon/mutable-images").Run()
-	if err != nil {
-		fmt.Println(err)
 	}
 	return c.String(204, "")
 }
