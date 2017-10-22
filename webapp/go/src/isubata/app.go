@@ -124,9 +124,9 @@ func addMessage(channelID, userID int64, content string) (int64, error) {
 	res, err := db.Exec(
 		"INSERT INTO message (channel_id, user_id, content, created_at) VALUES (?, ?, ?, NOW())",
 		channelID, userID, content)
-	if err != nil {
-		return 0, err
-	}
+	if err != nil { return 0, err }
+	_, err = redisClient.Incr(fmt.Sprintf("messages-%d", channelID)).Result()
+	if err != nil { return 0, err }
 	return res.LastInsertId()
 }
 
