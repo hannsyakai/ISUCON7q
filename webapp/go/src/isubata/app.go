@@ -25,6 +25,7 @@ import (
 	"github.com/labstack/echo"
 	"github.com/labstack/echo-contrib/session"
 	"github.com/labstack/echo/middleware"
+	"github.com/go-redis/redis"
 )
 
 const (
@@ -36,6 +37,7 @@ const (
 var (
 	imageFetchServer string
 	db               *sqlx.DB
+	redisClient      *redis.Client
 	ErrBadReqeust    = echo.NewHTTPError(http.StatusBadRequest)
 )
 
@@ -51,6 +53,15 @@ func init() {
 	seedBuf := make([]byte, 8)
 	crand.Read(seedBuf)
 	rand.Seed(int64(binary.LittleEndian.Uint64(seedBuf)))
+	redis_host := os.Getenv("ISUBATA_REDIS_ADDR") // 192.168.101.3:6379
+	if redis_host == "" {
+		redis_host = "127.0.0.1:6379"
+	}
+	redisClient = redis.NewClient(&redis.Options{
+		Addr:     redis_host,
+		Password: os.Getenv("ISUBATA_REDIS_PASSWORD"),
+		DB:       0,
+	})
 
 	db_host := os.Getenv("ISUBATA_DB_HOST")
 	if db_host == "" {
@@ -99,6 +110,12 @@ type User struct {
 	CreatedAt   time.Time `json:"-" db:"created_at"`
 }
 
+func getMessageCount(channelID int64) (int64, error) {
+	val, err := redisClient.Get(fmt.Sprintf("messages-%d", channelID)).Result()
+	cnt, _ := strconv.Atoi(val)
+	return int64(cnt), err
+}
+
 func getUser(userID int64) (*User, error) {
 	u := User{}
 	if err := db.Get(&u, "SELECT * FROM user WHERE id = ?", userID); err != nil {
@@ -114,9 +131,9 @@ func addMessage(channelID, userID int64, content string) (int64, error) {
 	res, err := db.Exec(
 		"INSERT INTO message (channel_id, user_id, content, created_at) VALUES (?, ?, ?, NOW())",
 		channelID, userID, content)
-	if err != nil {
-		return 0, err
-	}
+	if err != nil { return 0, err }
+	_, err = redisClient.Incr(fmt.Sprintf("messages-%d", channelID)).Result()
+	if err != nil { return 0, err }
 	return res.LastInsertId()
 }
 
@@ -217,14 +234,27 @@ func getInitialize(c echo.Context) error {
 
 	err := exec.Command("/bin/rm", "-rf", "/home/isucon/mutable-images").Run()
 	if err != nil {
-		fmt.Println(err)
+		return err
 	}
 
 	err = exec.Command("/bin/mkdir", "-p", "/home/isucon/mutable-images").Run()
 	if err != nil {
-		fmt.Println(err)
+		return err
 	}
 
+	redisClient.FlushAll()
+	channels, err := queryChannels()
+	if err != nil { return err }
+
+	for _, chID := range channels {
+		var cnt int64
+		err = db.Get(&cnt,
+			"SELECT COUNT(*) as cnt FROM message WHERE channel_id = ?",
+			chID)
+		if err != nil { return err }
+		err := redisClient.Set(fmt.Sprintf("messages-%d", chID), fmt.Sprint(cnt), 0).Err()
+		if err != nil { return err }
+	}
 	return c.String(204, "")
 }
 
@@ -414,13 +444,13 @@ func getMessage(c echo.Context) error {
 	}
 
 	if len(messages) > 0 {
-		_, err := db.Exec("INSERT INTO haveread (user_id, channel_id, message_id, updated_at, created_at)"+
+		cnt, err := getMessageCount(chanID)
+		if err != nil { return err }
+		_, err = db.Exec("INSERT INTO haveread (user_id, channel_id, message_id, updated_at, created_at)"+
 			" VALUES (?, ?, ?, NOW(), NOW())"+
 			" ON DUPLICATE KEY UPDATE message_id = ?, updated_at = NOW()",
-			userID, chanID, messages[0].ID, messages[0].ID)
-		if err != nil {
-			return err
-		}
+			userID, chanID, cnt, cnt)
+		if err != nil { return err }
 	}
 
 	return c.JSON(http.StatusOK, response)
@@ -461,32 +491,23 @@ func fetchUnread(c echo.Context) error {
 
 	time.Sleep(time.Second)
 
-	channels, err := queryChannels()
-	if err != nil {
-		return err
-	}
-
 	resp := []map[string]interface{}{}
 
-	for _, chID := range channels {
-		lastID, err := queryHaveRead(userID, chID)
-		if err != nil {
-			return err
-		}
-
+	type ChInfo struct {
+		ChID      int64     `db:"ch_id"`
+		ReadCnt   int64     `db:"msg_id"`
+	}
+	data := []ChInfo{}
+	err := db.Select(&data,
+		"SELECT id as ch_id, COALESCE(message_id, 0) as msg_id FROM channel LEFT JOIN haveread ON haveread.user_id=? AND haveread.channel_id=id", userID)
+	if err != nil { return err }
+	for _, x := range data {
+		var chID int64 = x.ChID
 		var cnt int64
-		if lastID > 0 {
-			err = db.Get(&cnt,
-				"SELECT COUNT(*) as cnt FROM message WHERE channel_id = ? AND ? < id",
-				chID, lastID)
-		} else {
-			err = db.Get(&cnt,
-				"SELECT COUNT(*) as cnt FROM message WHERE channel_id = ?",
-				chID)
-		}
-		if err != nil {
-			return err
-		}
+		cnt, err = getMessageCount(chID)
+		if err != nil { return err }
+		cnt = cnt - x.ReadCnt
+
 		r := map[string]interface{}{
 			"channel_id": chID,
 			"unread":     cnt}
