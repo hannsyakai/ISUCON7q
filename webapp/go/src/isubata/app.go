@@ -414,7 +414,7 @@ func getMessage(c echo.Context) error {
 		return err
 	}
 
-	response, err := allJsonifyMessage(chanID, lastID, 0, 0, messages)
+	response, err := allJsonifyMessage(chanID, lastID, 100, 0, messages)
 	if err != nil {
 		return err
 	}
