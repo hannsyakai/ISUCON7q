@@ -84,7 +84,7 @@ func init() {
 }
 
 type User struct {
-	ID          int64     `json:"-" db:"id"`
+	ID          int64     `json:"id" db:"id"`
 	Name        string    `json:"name" db:"name"`
 	Salt        string    `json:"-" db:"salt"`
 	Password    string    `json:"-" db:"password"`
@@ -120,6 +120,21 @@ type Message struct {
 	UserID    int64     `db:"user_id"`
 	Content   string    `db:"content"`
 	CreatedAt time.Time `db:"created_at"`
+}
+
+/*
+| id | content | channel_id | created_at          | user_id | user_name | user_display_name | user_avatar_icon |
++----+---------+------------+---------------------+---------+-----------+-------------------+------------------+
+*/
+type MessageInUser struct {
+	ID          int64     `db:"id"`
+	ChannelID   int64     `db:"channel_id"`
+	UserID      int64     `db:"user_id"`
+	Content     string    `db:"content"`
+	CreatedAt   time.Time `db:"created_at"`
+	Name        string    `db:"user_name"`
+	DisplayName string    `db:"user_display_name"`
+	AvatarIcon  string    `db:"user_avatar_icon"`
 }
 
 func queryMessages(chanID, lastID int64) ([]Message, error) {
@@ -366,18 +381,27 @@ func jsonifyMessage(m Message) (map[string]interface{}, error) {
 	return r, nil
 }
 
-func allJsonifyMessage(chanID, lastID, limit, offset int64, messages []Message) ([]map[string]interface{}, error) {
-	us := []User{}
-	err := db.Get(&us, "SELECT name, display_name, avatar_icon, id FROM user RIGHT OUTER JOIN"+
-		"(SELECT user_id FROM message WHERE id > ? AND channel_id = ? ORDER BY id DESC LIMIT ? OFFSET ?) msg ON user.id = msg.user_id",
+func allJsonifyMessage(chanID, lastID, limit, offset int64) ([]map[string]interface{}, error) {
+	/*
+			ID          int64     `db:"id"`
+		ChannelID   int64     `db:"channel_id"`
+		UserID      int64     `db:"user_id"`
+		Content     string    `db:"content"`
+		CreatedAt   time.Time `db:"created_at"`
+		Name        string    `db:"user_name"`
+		DisplayName string    `db:"user_display_name"`
+		AvatarIcon  string    `db:"user_avatar_icon"`
+	*/
+	messages := []MessageInUser{}
+	err := db.Get(&messages, "SELECT message.id as id, message.content as content, message.channel_id as channel_id, message.created_at as created_at, user.id as \"user_id\", user.name as \"user_name\", user.display_name as \"user_display_name\", user.avatar_icon as \"user_avatar_icon\" FROM message INNER JOIN user ON user.id = message.user_id WHERE message.id > ? AND message.channel_id = ? ORDER BY message.id DESC LIMIT ? OFFSET ?",
 		lastID, chanID, limit, offset)
+	//SELECT message.id as id, message.content as content, user.id as "user.id", user.name as "user.name", user.display_name as "user.display_name", user.avatar_icon as "user.avatar_icon" FROM message INNER JOIN user ON user.id = message.user_id WHERE message.id > 0 AND message.channel_id = 1 ORDER BY message.id DESC LIMIT 100 OFFSET 0
 	if err != nil {
+		fmt.Printf("SELECT message.id as id, message.content as content, message.channel_id as channel_id, message.created_at as created_at, user.id as \"user_id\", user.name as \"user_name\", user.display_name as \"user_display_name\", user.avatar_icon as \"user_avatar_icon\""+
+			" FROM message INNER JOIN user ON user.id = message.user_id WHERE message.id > %d AND message.channel_id = %d ORDER BY message.id DESC LIMIT %d OFFSET %d",
+			lastID, chanID, limit, offset)
+		fmt.Println("allJsonifyMessage Error!!!!!")
 		return nil, err
-	}
-
-	maicon := make([]User, 2000)
-	for _, v := range us {
-		maicon[v.ID] = v
 	}
 
 	mjson := make([]map[string]interface{}, 0)
@@ -386,7 +410,11 @@ func allJsonifyMessage(chanID, lastID, limit, offset int64, messages []Message) 
 
 		r := make(map[string]interface{})
 		r["id"] = m.ID
-		r["user"] = maicon[m.UserID]
+		r["user"] = User{
+			ID:          m.UserID,
+			AvatarIcon:  m.AvatarIcon,
+			DisplayName: m.DisplayName,
+		}
 		r["date"] = m.CreatedAt.Format("2006/01/02 15:04:05")
 		r["content"] = m.Content
 		mjson = append(mjson, r)
@@ -409,26 +437,21 @@ func getMessage(c echo.Context) error {
 		return err
 	}
 
-	messages, err := queryMessages(chanID, lastID)
+	response, err := allJsonifyMessage(chanID, lastID, 100, 0)
 	if err != nil {
 		return err
 	}
-
-	response, err := allJsonifyMessage(chanID, lastID, 100, 0, messages)
-	if err != nil {
-		return err
-	}
-
-	if len(messages) > 0 {
-		_, err := db.Exec("INSERT INTO haveread (user_id, channel_id, message_id, updated_at, created_at)"+
-			" VALUES (?, ?, ?, NOW(), NOW())"+
-			" ON DUPLICATE KEY UPDATE message_id = ?, updated_at = NOW()",
-			userID, chanID, messages[0].ID, messages[0].ID)
-		if err != nil {
-			return err
+	/*
+		if len(messages) > 0 {
+			_, err := db.Exec("INSERT INTO haveread (user_id, channel_id, message_id, updated_at, created_at)"+
+				" VALUES (?, ?, ?, NOW(), NOW())"+
+				" ON DUPLICATE KEY UPDATE message_id = ?, updated_at = NOW()",
+				userID, chanID, messages[0].ID, messages[0].ID)
+			if err != nil {
+				return err
+			}
 		}
-	}
-
+	*/
 	return c.JSON(http.StatusOK, response)
 }
 
@@ -538,15 +561,7 @@ func getHistory(c echo.Context) error {
 		return ErrBadReqeust
 	}
 
-	messages := []Message{}
-	err = db.Select(&messages,
-		"SELECT * FROM message WHERE channel_id = ? ORDER BY id DESC LIMIT ? OFFSET ?",
-		chID, N, (page-1)*N)
-	if err != nil {
-		return err
-	}
-
-	mjson, err := allJsonifyMessage(chID, 0, N, (page-1)*N, messages)
+	mjson, err := allJsonifyMessage(chID, 0, N, (page-1)*N)
 	if err != nil {
 		return err
 	}
