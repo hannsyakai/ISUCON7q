@@ -35,10 +35,11 @@ const (
 )
 
 var (
-	imageFetchServer string
-	db               *sqlx.DB
-	redisClient      *redis.Client
-	ErrBadReqeust    = echo.NewHTTPError(http.StatusBadRequest)
+	imagePrimaryFetchServer string
+	imageSecondFetchServer  string
+	db                      *sqlx.DB
+	redisClient             *redis.Client
+	ErrBadReqeust           = echo.NewHTTPError(http.StatusBadRequest)
 )
 
 type Renderer struct {
@@ -83,7 +84,8 @@ func init() {
 	dsn := fmt.Sprintf("%s%s@tcp(%s:%s)/isubata?parseTime=true&loc=Local&charset=utf8mb4",
 		db_user, db_password, db_host, db_port)
 
-	log.Printf("imageFetchServer: %s", imageFetchServer)
+	log.Printf("imageFetchServer: %s", imagePrimaryFetchServer)
+	log.Printf("imageFetchServer: %s", imageSecondFetchServer)
 	log.Printf("Connecting to db: %q", dsn)
 	db, _ = sqlx.Connect("mysql", dsn)
 	for {
@@ -452,8 +454,8 @@ func allJsonifyMessage(chanID, lastID, limit, offset int64) ([]map[string]interf
 		fmt.Println("allJsonifyMessage Error!!!!!")
 		return nil, err
 	}
-	
-	mjson := make([]map[string]interface{}, 0,len(messages))
+
+	mjson := make([]map[string]interface{}, 0, len(messages))
 	for i := len(messages) - 1; i >= 0; i-- {
 		m := messages[i]
 
@@ -770,8 +772,8 @@ func postProfile(c echo.Context) error {
 	return c.Redirect(http.StatusSeeOther, "/")
 }
 
-func getIconFromAP2(name string) ([]byte, error) {
-	path := fmt.Sprintf("http://%s/nginx_fetch_image/%s", imageFetchServer, name)
+func getIconFromAP(name string, server string) ([]byte, error) {
+	path := fmt.Sprintf("http://%s/nginx_fetch_image/%s", server, name)
 	log.Println(path)
 	resp, err := http.DefaultClient.Get(path)
 	if err != nil {
@@ -806,10 +808,18 @@ func getIcon(c echo.Context) error {
 	name := c.Param("file_name")
 	mime := ""
 
-	data, err = getIconFromAP2(name)
+	data, err = getIconFromAP(name, imagePrimaryFetchServer)
 	if err != nil {
 		log.Println(err)
 	}
+
+	if data != nil {
+		data, err = getIconFromAP(name, imageSecondFetchServer)
+		if err != nil {
+			log.Println(err)
+		}
+	}
+
 	file, err := os.Create(fmt.Sprintf("%s%s", mutableImage, name))
 	if err != nil {
 		log.Printf("!!!ERROR!!! %s", err)
